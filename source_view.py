@@ -89,7 +89,6 @@ class Source:
         
     @property
     def children(self):
-        print(self.root, Glob(self.root), 'LSKDFJKJLSKDJF')
         files = Glob(self.root, silent=True)
         self.folders = [Source(f) for f in files if os.path.isdir(f)]
         self.files = [f for f in files if not os.path.isdir(f)]
@@ -128,50 +127,54 @@ class Source:
     def filter(self, extension):
         return self.resolve(extension=extension)
 
+def add_node_if_not_existing(network, node_name, **kwargs):
+    if network.has_node(node_name):
+        pass
+    else:
+        network.add_node(node_name, **kwargs)
 
-def pretty(node, NETWORK):
+def pretty(node, NETWORK, children=False):
     if isinstance(node, AttrDict):
         return [pretty(_node) for k,_node in node.items()]
     if len(node) == 0: return
-    NETWORK.add_node(node.file, size=15, color='red', name=node.file, typ='file')
+    add_node_if_not_existing(NETWORK, node.file, size=15, color='red', name=node.file, typ='file')
     for f in node.functions:
-        NETWORK.add_node(f.name, size=10, color='green', name=f.name, typ='function')
+        add_node_if_not_existing(NETWORK, f.name, size=8, color='green', name=f.name, typ='function')
         NETWORK.add_edge(f.name, node.file, weight=1/5)
-        [(NETWORK.add_node(child, size=5, color='yellow', name=child, typ='child'), NETWORK.add_edge(f.name, child, weight=1/2.5)) 
-         for child in f.children]
+        if children:
+            [(add_node_if_not_existing(NETWORK, child, size=5, color='yellow', name=child, typ='child'), NETWORK.add_edge(f.name, child, weight=1/2.5)) 
+            for child in f.children]
     for cls in node.classes:
-        NETWORK.add_node(cls.name, size=10, color='purple', name=cls.name, typ='class')
+        add_node_if_not_existing(NETWORK, cls.name, size=12, color='purple', name=cls.name, typ='class')
         NETWORK.add_edge(cls.name, node.file, weight=1/4)
         for method in cls.methods:
             try:
-                NETWORK.add_node(method.name, size=5, color='blue', name=method.name, typ='method')
+                add_node_if_not_existing(NETWORK, method.name, size=5, color='blue', name=method.name, typ='method')
                 NETWORK.add_edge(cls.name, method.name, weight=1/2.5)
-                [(NETWORK.add_node(child, size=5, color='yellow', name=child, typ='child'), NETWORK.add_edge(method.name, child, weight=1/1)) 
-                 for child in method.children]
+                if children:
+                    [(add_node_if_not_existing(NETWORK, child, size=5, color='yellow', name=child, typ='child'), NETWORK.add_edge(method.name, child, weight=1/1)) 
+                    for child in method.children]
             except:
                 ...
 
 def summarize(folder, NETWORK):
     x = Source(folder)
-    print(x.tree)
     [pretty(getattr(x.tree, f), NETWORK) for f in dir(x.tree)]
-
+    [pretty(getattr(x.tree, f), NETWORK, children=True) for f in dir(x.tree)]
 
 @contextlib.contextmanager
 def working_directory(path):
     prev_cwd = os.getcwd()
-    os.chdir(path)
-    print(os.listdir(os.getcwd()))
+    os.chdir(parent(path))
+    print(str(P(path).resolve()))
+    sys.path.append(str(P(path).resolve()))
+    print(sys.path)
     yield
     os.chdir(prev_cwd)
 
-from typer import Typer
-
-app = Typer()
-@app.command()
 def main(folder):
     if folder.endswith('/'): folder = folder[:-1]
-    with working_directory(parent(folder)):
+    with working_directory(folder):
         NETWORK = nx.Graph()
         summarize(stem(folder), NETWORK)
 
@@ -180,8 +183,8 @@ def main(folder):
     # pos_ = nx.rescale_layout(NETWORK)
 
     plot = Plot(
-        plot_width=1920,
-        plot_height=1080,
+        plot_width=1024,
+        plot_height=1024,
         x_range=Range1d(-1.1,1.1),
         y_range=Range1d(-1.1,1.1)
     )
@@ -251,6 +254,3 @@ def main(folder):
     plot.renderers.append(labels)
     output_file(f"{folder}.html")
     show(plot)
-
-if __name__ == '__main__':
-    app()
