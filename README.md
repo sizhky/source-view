@@ -19,3 +19,9 @@ Legend:
   * Purple: Class
   * Green: Function
   * Yellow: Other functions/dependencies
+
+## Performance
+
+The bottleneck is to generate graph layout for the entire source. I have tested with a few libraries and is slow for medium size. For example it took 3m 17s to render graph for scrapy which contained 4239 nodes and 7600 edges.
+
+IMO this is best for analyzing library with under 20 files.
