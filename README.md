@@ -4,7 +4,7 @@
 Usage
 
 ```bash
-$ python source_view.py ~/Documents/github/euclid/`
+$ python source_view.py ~/Documents/github/torch_snippets/torch_snippets/`
 ```
 This would generate a file called as `torch_snippets.html` at `~/Documents/github/torch_snippets/torch_snippets/`  
 Download [torch_snippets.html](torch_snippets.html) to see it interactive
