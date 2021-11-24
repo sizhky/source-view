@@ -15,6 +15,7 @@ from bokeh.palettes import Spectral4
 from bokeh.models import ColumnDataSource, LabelSet
 
 def merge(l):
+    l = [_l for _l in l if _l != {}]
     d = AttrDict(dict((k,v) for d in l for k,v in d.items()))
     return AttrDict({k:v for k,v in d.items() if v != {}})
 
@@ -29,7 +30,10 @@ class PyObj:
 
     @property
     def source(self):
-        return getsource(self.function)
+        try:
+            return getsource(self.function)
+        except:
+            return getsource(self.function.fget)
 
 class PyFunc(PyObj):
     @property
@@ -86,7 +90,7 @@ class Source:
         self.root = root
         self.catalogue = AttrDict({})
         self.tree = self.filter(extension)
-        
+
     @property
     def children(self):
         files = Glob(self.root, silent=True)
@@ -166,27 +170,33 @@ def summarize(folder, NETWORK):
 def working_directory(path):
     prev_cwd = os.getcwd()
     os.chdir(parent(path))
-    print(str(P(path).resolve()))
     sys.path.append(str(P(path).resolve()))
-    print(sys.path)
     yield
     os.chdir(prev_cwd)
+
+def get_ranges(pos):
+    xs, ys = zip(*list(pos.values()))
+    return np.min(xs), np.max(xs), np.min(ys), np.max(ys)
 
 def main(folder):
     if folder.endswith('/'): folder = folder[:-1]
     with working_directory(folder):
         NETWORK = nx.Graph()
         summarize(stem(folder), NETWORK)
-
+        logger.info(f'Built the graph for {folder}. {len(NETWORK.nodes)} nodes and {len(NETWORK.edges)} edges found')
     # find('layout', dir(nx))
-    pos_ = nx.kamada_kawai_layout(NETWORK)
+    pos_ = nx.nx_agraph.graphviz_layout(NETWORK, 'neato')
+    # pos_ = nx.kamada_kawai_layout(NETWORK)
     # pos_ = nx.rescale_layout(NETWORK)
+    # pos_ = nx.spring_layout(NETWORK)
+    logger.info(f'Identified the layout')
 
+    x, X, y, Y = get_ranges(pos_)
     plot = Plot(
         plot_width=1024,
         plot_height=1024,
-        x_range=Range1d(-1.1,1.1),
-        y_range=Range1d(-1.1,1.1)
+        x_range=Range1d(x,X),
+        y_range=Range1d(y,Y)
     )
 
     plot.add_tools(
