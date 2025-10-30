@@ -382,11 +382,9 @@ def working_directory(path: str):
         os.chdir(prev_cwd)
 
 
-def prepare_graph_data(network: nx.Graph) -> Dict[str, Any]:
-    """Convert NetworkX graph to Sigma.js compatible format."""
+def prepare_graph_data(network: nx.Graph) -> tuple[List[Dict], List[Dict]]:
+    """Convert NetworkX graph to D3.js compatible format."""
     nodes_data = []
-    edges_data = []
-
     node_list = list(network.nodes(data=True))
 
     # Filter out yellow (child) nodes
@@ -396,648 +394,186 @@ def prepare_graph_data(network: nx.Graph) -> Dict[str, Any]:
         if attrs.get("color") != "yellow"
     ]
 
-    # Create nodes for Sigma
+    # Create set of valid node IDs for quick lookup
+    valid_node_ids = {node[0] for node in filtered_node_list}
+
     for node_name, attrs in filtered_node_list:
         nodes_data.append(
             {
-                "key": node_name,
-                "label": attrs.get("name", node_name),
+                "id": node_name,
+                "name": attrs.get("name", node_name),
                 "size": attrs.get("size", 5),
                 "color": attrs.get("color", "gray"),
                 "type": attrs.get("typ", "unknown"),
-                "x": 0,  # Will be positioned by ForceAtlas2
-                "y": 0,
             }
         )
 
-    # Get valid node keys
-    valid_nodes = {node["key"] for node in nodes_data}
-
-    # Create edges for Sigma
-    edge_id = 0
+    edges_data = []
     for source, target, attrs in network.edges(data=True):
-        if source in valid_nodes and target in valid_nodes:
+        # Only include edges where both nodes are in the filtered set
+        # Use node IDs directly (strings), not indices
+        if source in valid_node_ids and target in valid_node_ids:
             edges_data.append(
                 {
-                    "key": f"edge_{edge_id}",
                     "source": source,
                     "target": target,
-                    "size": attrs.get("weight", 1),
+                    "weight": attrs.get("weight", 1),
                 }
             )
-            edge_id += 1
 
-    return {"nodes": nodes_data, "edges": edges_data}
+    return nodes_data, edges_data
 
 
-def generate_html_template(folder: str, graph_data: Dict[str, Any]) -> str:
-    """Generate HTML content with Sigma.js (GPU-accelerated WebGL renderer)."""
+def generate_html_template(
+    folder: str, nodes_data: List[Dict], edges_data: List[Dict]
+) -> str:
+    """Generate HTML content with force-graph library."""
     return f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
     <title>{folder} - Interactive Graph</title>
-    <script src="https://cdn.jsdelivr.net/npm/graphology@0.25.4/dist/graphology.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/sigma@2.4.0/build/sigma.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/graphology-layout-forceatlas2@0.10.1/build/graphology-layout-forceatlas2.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/graphology-layout@0.17.0/build/graphology-layout.umd.min.js"></script>
+    <script src="https://unpkg.com/force-graph"></script>
     <style>
-        * {{
+        body {{
             margin: 0;
             padding: 0;
-            box-sizing: border-box;
-        }}
-        body {{
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             overflow: hidden;
-            background: #0a0a0a;
+            font-family: Arial, sans-serif;
         }}
-        #container {{
+        #graph {{
             width: 100vw;
             height: 100vh;
-            position: relative;
-        }}
-        #controls {{
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background: rgba(0, 0, 0, 0.85);
-            padding: 20px;
-            border-radius: 8px;
-            color: white;
-            z-index: 1000;
-            max-width: 350px;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }}
-        #controls h3 {{
-            margin: 0 0 15px 0;
-            font-size: 16px;
-            font-weight: 600;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-            padding-bottom: 8px;
-        }}
-        .control-group {{
-            margin-bottom: 15px;
-        }}
-        .control-group label {{
-            display: block;
-            margin-bottom: 5px;
-            font-size: 12px;
-            color: #aaa;
-            font-weight: 500;
-        }}
-        input[type="text"], input[type="range"], select {{
-            width: 100%;
-            padding: 8px;
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            color: white;
-            border-radius: 4px;
-            font-size: 13px;
-        }}
-        input[type="text"]:focus, select:focus {{
-            outline: none;
-            border-color: #ff6600;
-        }}
-        input[type="range"] {{
-            padding: 0;
-        }}
-        button {{
-            padding: 8px 15px;
-            background: #ff6600;
-            border: none;
-            color: white;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: 500;
-            margin-right: 8px;
-            margin-top: 5px;
-            transition: background 0.2s;
-        }}
-        button:hover {{
-            background: #ff7722;
-        }}
-        button:active {{
-            background: #dd5500;
-        }}
-        .value-display {{
-            display: inline-block;
-            margin-left: 8px;
-            color: #ff6600;
-            font-weight: 600;
-        }}
-        #info-panel {{
-            position: absolute;
-            bottom: 20px;
-            left: 20px;
-            background: rgba(0, 0, 0, 0.85);
-            padding: 15px;
-            border-radius: 8px;
-            color: white;
-            z-index: 1000;
-            font-size: 12px;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }}
-        #node-info {{
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            background: rgba(0, 0, 0, 0.9);
-            padding: 15px;
-            border-radius: 8px;
-            color: white;
-            z-index: 1000;
-            max-width: 400px;
-            display: none;
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }}
-        #node-info h4 {{
-            margin: 0 0 10px 0;
-            color: #ff6600;
-            font-size: 14px;
-        }}
-        #node-info p {{
-            margin: 5px 0;
-            font-size: 12px;
-        }}
-        .legend {{
-            margin-top: 15px;
-        }}
-        .legend-item {{
-            display: flex;
-            align-items: center;
-            margin: 5px 0;
-            font-size: 11px;
-        }}
-        .legend-color {{
-            width: 12px;
-            height: 12px;
-            margin-right: 8px;
-            border-radius: 2px;
         }}
     </style>
 </head>
 <body>
-    <div id="container"></div>
-    
-    <div id="controls">
-        <h3>⚙️ Controls</h3>
-        
-        <div class="control-group">
-            <label>🔍 Search Nodes (Regex)</label>
-            <input type="text" id="searchInput" placeholder="Enter regex pattern...">
-        </div>
-        
-        <div class="control-group">
-            <label>🎨 Filter by Type</label>
-            <select id="typeFilter">
-                <option value="all">All Types</option>
-                <option value="file">Files</option>
-                <option value="class">Classes</option>
-                <option value="function">Functions</option>
-                <option value="method">Methods</option>
-            </select>
-        </div>
-        
-        <div class="control-group">
-            <label>📏 Node Size <span class="value-display" id="sizeValue">1.0x</span></label>
-            <input type="range" id="sizeSlider" min="0.5" max="3" step="0.1" value="1.0">
-        </div>
-        
-        <div class="control-group">
-            <label>🎯 Physics Intensity <span class="value-display" id="physicsValue">1.0x</span></label>
-            <input type="range" id="physicsSlider" min="0" max="2" step="0.1" value="1.0">
-        </div>
-        
-        <div class="control-group">
-            <button id="resetBtn">🔄 Reset View</button>
-            <button id="layoutBtn">🌀 Re-layout</button>
-        </div>
-        
-        <div class="legend">
-            <strong style="font-size: 11px;">LEGEND</strong>
-            <div class="legend-item"><div class="legend-color" style="background: red;"></div> File</div>
-            <div class="legend-item"><div class="legend-color" style="background: purple;"></div> Class</div>
-            <div class="legend-item"><div class="legend-color" style="background: green;"></div> Function</div>
-            <div class="legend-item"><div class="legend-color" style="background: blue;"></div> Method</div>
-        </div>
-    </div>
-    
-    <div id="info-panel">
-        <div><strong>Nodes:</strong> <span id="nodeCount">0</span> | <strong>Edges:</strong> <span id="edgeCount">0</span></div>
-        <div style="margin-top: 8px; font-size: 11px; color: #888;">
-            Click: Select | Drag: Move | Scroll: Zoom | Drag BG: Pan
-        </div>
-    </div>
-    
-    <div id="node-info"></div>
-
+    <div id="graph"></div>
     <script>
-        const graphData = {json.dumps(graph_data)};
+        const graphData = {{
+            nodes: {json.dumps(nodes_data)},
+            links: {json.dumps(edges_data)}
+        }};
         
-        // Create graph using Graphology
-        const graph = new graphology.Graph();
-        
-        // Add nodes and edges to graph
-        graphData.nodes.forEach(node => {{
-            graph.addNode(node.key, {{
-                label: node.label,
-                size: node.size,
-                color: node.color,
-                type: node.type,
-                x: Math.random() * 1000,
-                y: Math.random() * 1000
-            }});
-        }});
-        
-        graphData.edges.forEach(edge => {{
-            if (graph.hasNode(edge.source) && graph.hasNode(edge.target)) {{
-                graph.addEdge(edge.source, edge.target, {{
-                    size: edge.size
-                }});
-            }}
-        }});
-        
-        // Update stats
-        document.getElementById('nodeCount').textContent = graph.order;
-        document.getElementById('edgeCount').textContent = graph.size;
-        
-        // Apply initial random positions if not set
-        graph.forEachNode((node, attrs) => {{
-            if (!attrs.x || !attrs.y) {{
-                const angle = Math.random() * Math.PI * 2;
-                const radius = 300 + Math.random() * 200;
-                graph.setNodeAttribute(node, 'x', Math.cos(angle) * radius);
-                graph.setNodeAttribute(node, 'y', Math.sin(angle) * radius);
-            }}
-        }});
-        
-        // Then apply ForceAtlas2 if available
-        if (typeof graphologyLayoutForceAtlas2 !== 'undefined') {{
-            try {{
-                const FA2 = graphologyLayoutForceAtlas2.default || graphologyLayoutForceAtlas2;
-                const settings = FA2.inferSettings ? FA2.inferSettings(graph) : {{}};
-                FA2.assign(graph, {{ iterations: 150, settings }});
-            }} catch(e) {{
-                console.warn('ForceAtlas2 layout failed, using random layout:', e);
-            }}
-        }}
-        
-        // Remove type attribute to avoid Sigma.js program errors
-        graph.forEachNode((node, attrs) => {{
-            graph.removeNodeAttribute(node, 'type');
-        }});
-        
-        // Create Sigma renderer with GPU acceleration
-        const container = document.getElementById('container');
-        const renderer = new Sigma(graph, container, {{
-            renderEdgeLabels: false,
-            defaultNodeColor: '#999',
-            defaultEdgeColor: '#444',
-            labelSize: 14,
-            labelWeight: 'normal',
-            labelColor: {{ color: '#fff' }},
-            enableEdgeEvents: true,
-            // Make zoom less aggressive
-            zoomingRatio: 1.3,
-            mouseWheelEnabled: true,
-            // Enable better interaction
-            allowInvalidContainer: false
-        }});
-        
-        // Make zoom less aggressive by overriding wheel behavior
-        const camera = renderer.getCamera();
-        container.addEventListener('wheel', (e) => {{
-            e.preventDefault();
-            const scaleFactor = e.deltaY > 0 ? 1.1 : 1/1.1;
-            camera.animatedZoom({{ factor: scaleFactor, duration: 150 }});
-        }}, {{ passive: false }});
-        
-        // State management
-        let hoveredNode = null;
+        // Track highlighted nodes
+        const highlightNodes = new Set();
+        const highlightLinks = new Set();
         let selectedNode = null;
-        let draggedNode = null;
-        let isDragging = false;
-        const State = {{ searchQuery: '', typeFilter: 'all', sizeMultiplier: 1.0, physicsStrength: 1.0 }};
         
-        // Store original attributes (including type info separately)
-        const originalNodeAttributes = new Map();
-        const nodeTypes = new Map();
-        const originalEdgeAttributes = new Map();
-        graph.forEachNode((node, attrs) => {{
-            originalNodeAttributes.set(node, {{ ...attrs }});
-            // Store type info separately since we removed it from graph
-            const originalData = graphData.nodes.find(n => n.key === node);
-            if (originalData) {{
-                nodeTypes.set(node, originalData.type);
-            }}
-        }});
-        graph.forEachEdge((edge, attrs) => {{
-            originalEdgeAttributes.set(edge, {{ ...attrs }});
-        }});
-        
-        // Neighbor calculation
-        function getNeighbors(nodeId) {{
-            const neighbors = new Set();
-            graph.forEachNeighbor(nodeId, neighbor => neighbors.add(neighbor));
-            return neighbors;
-        }}
-        
-        // Path finding (BFS)
-        function findPath(startNode, endNode) {{
-            if (!graph.hasNode(startNode) || !graph.hasNode(endNode)) return null;
-            const queue = [[startNode]];
-            const visited = new Set([startNode]);
-            
-            while (queue.length > 0) {{
-                const path = queue.shift();
-                const node = path[path.length - 1];
+        const Graph = ForceGraph()(document.getElementById('graph'))
+            .width(window.innerWidth)
+            .height(window.innerHeight)
+            .graphData(graphData)
+            .nodeId('id')
+            .nodeLabel(node => node.name)
+            .nodeColor(node => {{
+                if (selectedNode === node) return '#ff6600';
+                if (highlightNodes.size === 0) return node.color;
+                return highlightNodes.has(node) ? node.color : 'rgba(128,128,128,0.3)';
+            }})
+            .nodeVal(node => node.size * node.size)
+            .nodeRelSize(1)
+            .nodeCanvasObject((node, ctx, globalScale) => {{
+                // Draw the circle
+                const nodeRadius = Math.sqrt(node.size * node.size) * 1;
+                ctx.beginPath();
+                ctx.arc(node.x, node.y, nodeRadius, 0, 2 * Math.PI, false);
                 
-                if (node === endNode) return path;
+                // Fill circle with color
+                const color = selectedNode === node ? '#ff6600' : 
+                             (highlightNodes.size === 0 || highlightNodes.has(node)) ? node.color : 'rgba(128,128,128,0.3)';
+                ctx.fillStyle = color;
+                ctx.fill();
                 
-                graph.forEachNeighbor(node, neighbor => {{
-                    if (!visited.has(neighbor)) {{
-                        visited.add(neighbor);
-                        queue.push([...path, neighbor]);
-                    }}
-                }});
-            }}
-            return null;
-        }}
-        
-        // Filtering and highlighting
-        function applyFilters() {{
-            const searchRegex = State.searchQuery ? new RegExp(State.searchQuery, 'i') : null;
-            
-            graph.forEachNode((node, attrs) => {{
-                const original = originalNodeAttributes.get(node);
-                const nodeType = nodeTypes.get(node);
-                let visible = true;
+                // Only draw labels when zoomed in enough (globalScale > 1.5) or node is selected/highlighted
+                const showLabel = globalScale > 1.5 || selectedNode === node || 
+                                 (highlightNodes.size > 0 && highlightNodes.has(node));
                 
-                // Type filter
-                if (State.typeFilter !== 'all' && nodeType !== State.typeFilter) {{
-                    visible = false;
-                }}
-                
-                // Search filter
-                if (searchRegex && !searchRegex.test(attrs.label)) {{
-                    visible = false;
-                }}
-                
-                // Apply visibility
-                graph.setNodeAttribute(node, 'hidden', !visible);
-                graph.setNodeAttribute(node, 'size', original.size * State.sizeMultiplier);
-            }});
-            
-            renderer.refresh();
-        }}
-        
-        // Highlight node and neighbors
-        function highlightNode(nodeId) {{
-            if (!nodeId) {{
-                // Reset all
-                graph.forEachNode((node) => {{
-                    const original = originalNodeAttributes.get(node);
-                    graph.setNodeAttribute(node, 'color', original.color);
-                    graph.setNodeAttribute(node, 'highlighted', false);
-                }});
-                graph.forEachEdge((edge) => {{
-                    graph.setEdgeAttribute(edge, 'color', '#444');
-                    graph.setEdgeAttribute(edge, 'size', 1);
-                }});
-                selectedNode = null;
-                document.getElementById('node-info').style.display = 'none';
-            }} else {{
-                const neighbors = getNeighbors(nodeId);
-                
-                graph.forEachNode((node) => {{
-                    const original = originalNodeAttributes.get(node);
-                    if (node === nodeId) {{
-                        graph.setNodeAttribute(node, 'color', '#ff6600');
-                        graph.setNodeAttribute(node, 'highlighted', true);
-                    }} else if (neighbors.has(node)) {{
-                        graph.setNodeAttribute(node, 'color', original.color);
-                        graph.setNodeAttribute(node, 'highlighted', false);
+                if (showLabel) {{
+                    // Draw label next to node
+                    const label = node.name;
+                    const fontSize = 14 / globalScale;
+                    ctx.font = `${{fontSize}}px Sans-Serif`;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+                    
+                    const x = node.x + nodeRadius + 2;
+                    const y = node.y;
+                    
+                    // Draw background for better readability
+                    const padding = 2;
+                    const textWidth = ctx.measureText(label).width;
+                    const textHeight = fontSize;
+                    
+                    if (highlightNodes.size === 0 || highlightNodes.has(node)) {{
+                        ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                        ctx.fillRect(x - padding, y - textHeight/2 - padding, 
+                                   textWidth + 2*padding, textHeight + 2*padding);
+                        ctx.fillStyle = '#333';
                     }} else {{
-                        graph.setNodeAttribute(node, 'color', '#222');
-                        graph.setNodeAttribute(node, 'highlighted', false);
+                        ctx.fillStyle = 'rgba(200, 200, 200, 0.3)';
                     }}
-                }});
-                
-                graph.forEachEdge((edge, attrs, source, target) => {{
-                    if (source === nodeId || target === nodeId) {{
-                        graph.setEdgeAttribute(edge, 'color', '#ff6600');
-                        graph.setEdgeAttribute(edge, 'size', 2);
-                    }} else {{
-                        graph.setEdgeAttribute(edge, 'color', '#111');
-                        graph.setEdgeAttribute(edge, 'size', 0.5);
-                    }}
-                }});
-                
-                selectedNode = nodeId;
-                
-                // Show node info
-                const attrs = graph.getNodeAttributes(nodeId);
-                const nodeType = nodeTypes.get(nodeId);
-                const degree = graph.degree(nodeId);
-                const neighbors_list = Array.from(neighbors).slice(0, 5).join(', ');
-                document.getElementById('node-info').innerHTML = `
-                    <h4>${{attrs.label}}</h4>
-                    <p><strong>Type:</strong> ${{nodeType || 'unknown'}}</p>
-                    <p><strong>Connections:</strong> ${{degree}}</p>
-                    <p><strong>Neighbors:</strong> ${{neighbors_list}}${{neighbors.size > 5 ? '...' : ''}}</p>
-                    <button onclick="highlightNode(null)" style="margin-top: 10px;">✕ Close</button>
-                `;
-                document.getElementById('node-info').style.display = 'block';
-            }}
-            
-            renderer.refresh();
-        }}
-        
-        // Event Handlers
-        renderer.on('clickNode', ({{ node }}) => {{
-            if (selectedNode === node) {{
-                highlightNode(null);
-            }} else {{
-                highlightNode(node);
-            }}
-        }});
-        
-        renderer.on('clickStage', () => {{
-            highlightNode(null);
-        }});
-        
-        // Enhanced drag functionality with physics simulation
-        let dragOffset = {{ x: 0, y: 0 }};
-        let isNodeDragging = false;
-        
-        renderer.on('downNode', (e) => {{
-            isNodeDragging = true;
-            isDragging = true;
-            draggedNode = e.node;
-            
-            // Calculate offset between mouse and node center
-            const nodeDisplayPosition = renderer.graphToViewport(graph.getNodeAttributes(draggedNode));
-            dragOffset.x = e.event.offsetX - nodeDisplayPosition.x;
-            dragOffset.y = e.event.offsetY - nodeDisplayPosition.y;
-            
-            // Start simple physics simulation
-            startPhysicsSimulation();
-            
-            graph.setNodeAttribute(draggedNode, 'highlighted', true);
-        }});
-        
-        renderer.getMouseCaptor().on('mousemovebody', (e) => {{
-            if (!isDragging || !draggedNode || !isNodeDragging) return;
-            
-            // Convert mouse position to graph coordinates with offset
-            const viewportPos = {{ x: e.x - dragOffset.x, y: e.y - dragOffset.y }};
-            const graphPos = renderer.viewportToGraph(viewportPos);
-            
-            graph.setNodeAttribute(draggedNode, 'x', graphPos.x);
-            graph.setNodeAttribute(draggedNode, 'y', graphPos.y);
-            
-            // Apply spring forces to connected nodes
-            applySpringForces(draggedNode);
-        }});
-        
-        renderer.getMouseCaptor().on('mouseup', () => {{
-            if (draggedNode) {{
-                graph.removeNodeAttribute(draggedNode, 'highlighted');
-            }}
-            isNodeDragging = false;
-            isDragging = false;
-            draggedNode = null;
-            stopPhysicsSimulation();
-        }});
-        
-        // Physics simulation for springy behavior
-        let physicsInterval = null;
-        
-        function startPhysicsSimulation() {{
-            if (physicsInterval) clearInterval(physicsInterval);
-            
-            physicsInterval = setInterval(() => {{
-                if (!draggedNode) return;
-                
-                // Apply light repulsion between all nodes
-                graph.forEachNode((nodeId, attrs) => {{
-                    if (nodeId === draggedNode) return;
-                    
-                    const dx = attrs.x - graph.getNodeAttribute(draggedNode, 'x');
-                    const dy = attrs.y - graph.getNodeAttribute(draggedNode, 'y');
-                    const distance = Math.sqrt(dx * dx + dy * dy);
-                    
-                    if (distance < 100 && distance > 0) {{
-                        const force = (100 - distance) * 0.01;
-                        const fx = (dx / distance) * force;
-                        const fy = (dy / distance) * force;
-                        
-                        graph.setNodeAttribute(nodeId, 'x', attrs.x + fx);
-                        graph.setNodeAttribute(nodeId, 'y', attrs.y + fy);
-                    }}
-                }});
-                
-                renderer.refresh();
-            }}, 16); // ~60 FPS
-        }}
-        
-        function stopPhysicsSimulation() {{
-            if (physicsInterval) {{
-                clearInterval(physicsInterval);
-                physicsInterval = null;
-            }}
-        }}
-        
-        function applySpringForces(centralNode) {{
-            const centralPos = graph.getNodeAttributes(centralNode);
-            
-            // Apply spring forces to neighbors
-            graph.forEachNeighbor(centralNode, (neighbor) => {{
-                const neighborPos = graph.getNodeAttributes(neighbor);
-                const dx = centralPos.x - neighborPos.x;
-                const dy = centralPos.y - neighborPos.y;
-                const distance = Math.sqrt(dx * dx + dy * dy);
-                
-                if (distance > 0) {{
-                    const idealDistance = 150;
-                    const force = (distance - idealDistance) * 0.03;
-                    const fx = (dx / distance) * force;
-                    const fy = (dy / distance) * force;
-                    
-                    graph.setNodeAttribute(neighbor, 'x', neighborPos.x + fx);
-                    graph.setNodeAttribute(neighbor, 'y', neighborPos.y + fy);
+                    ctx.fillText(label, x, y);
                 }}
-            }});
-        }}
-        
-        // Controls
-        document.getElementById('searchInput').addEventListener('input', (e) => {{
-            State.searchQuery = e.target.value;
-            applyFilters();
-        }});
-        
-        document.getElementById('typeFilter').addEventListener('change', (e) => {{
-            State.typeFilter = e.target.value;
-            applyFilters();
-        }});
-        
-        document.getElementById('sizeSlider').addEventListener('input', (e) => {{
-            State.sizeMultiplier = parseFloat(e.target.value);
-            document.getElementById('sizeValue').textContent = State.sizeMultiplier.toFixed(1) + 'x';
-            applyFilters();
-        }});
-        
-        document.getElementById('physicsSlider').addEventListener('input', (e) => {{
-            State.physicsStrength = parseFloat(e.target.value);
-            document.getElementById('physicsValue').textContent = State.physicsStrength.toFixed(1) + 'x';
-        }});
-        
-        document.getElementById('resetBtn').addEventListener('click', () => {{
-            renderer.getCamera().animate({{ x: 0.5, y: 0.5, ratio: 1 }}, {{ duration: 500 }});
-            highlightNode(null);
-        }});
-        
-        document.getElementById('layoutBtn').addEventListener('click', () => {{
-            if (typeof graphologyLayoutForceAtlas2 !== 'undefined') {{
-                try {{
-                    const FA2 = graphologyLayoutForceAtlas2.default || graphologyLayoutForceAtlas2;
-                    const settings = FA2.inferSettings ? FA2.inferSettings(graph) : {{}};
-                    settings.gravity = State.physicsStrength;
-                    FA2.assign(graph, {{ iterations: 100, settings }});
-                    renderer.refresh();
-                }} catch(e) {{
-                    console.error('Layout failed:', e);
-                    // Fallback to random circular layout
-                    graph.forEachNode((node) => {{
-                        const angle = Math.random() * Math.PI * 2;
-                        const radius = 300 + Math.random() * 200;
-                        graph.setNodeAttribute(node, 'x', Math.cos(angle) * radius);
-                        graph.setNodeAttribute(node, 'y', Math.sin(angle) * radius);
+            }})
+            .linkColor(link => {{
+                if (highlightLinks.size === 0) return 'rgba(153,153,153,0.6)';
+                return highlightLinks.has(link) ? '#ff6600' : 'rgba(153,153,153,0.1)';
+            }})
+            .linkWidth(link => {{
+                if (highlightLinks.size === 0) return Math.sqrt(link.weight || 1);
+                return highlightLinks.has(link) ? 2 : Math.sqrt(link.weight || 1);
+            }})
+            .linkDirectionalParticles(link => highlightLinks.has(link) ? 2 : 0)
+            .linkDirectionalParticleWidth(2)
+            .onNodeClick(node => {{
+                // Toggle selection
+                if (selectedNode === node) {{
+                    selectedNode = null;
+                    highlightNodes.clear();
+                    highlightLinks.clear();
+                }} else {{
+                    selectedNode = node;
+                    highlightNodes.clear();
+                    highlightLinks.clear();
+                    
+                    highlightNodes.add(node);
+                    
+                    // Add neighbors
+                    graphData.links.forEach(link => {{
+                        if (link.source === node || link.source.id === node.id) {{
+                            highlightLinks.add(link);
+                            const target = typeof link.target === 'object' ? link.target : 
+                                         graphData.nodes.find(n => n.id === link.target);
+                            if (target) highlightNodes.add(target);
+                        }}
+                        if (link.target === node || link.target.id === node.id) {{
+                            highlightLinks.add(link);
+                            const source = typeof link.source === 'object' ? link.source : 
+                                         graphData.nodes.find(n => n.id === link.source);
+                            if (source) highlightNodes.add(source);
+                        }}
                     }});
-                    renderer.refresh();
                 }}
-            }} else {{
-                // Random circular layout
-                graph.forEachNode((node) => {{
-                    const angle = Math.random() * Math.PI * 2;
-                    const radius = 300 + Math.random() * 200;
-                    graph.setNodeAttribute(node, 'x', Math.cos(angle) * radius);
-                    graph.setNodeAttribute(node, 'y', Math.sin(angle) * radius);
-                }});
-                renderer.refresh();
-            }}
+                Graph.nodeColor(Graph.nodeColor()); // Trigger redraw
+            }})
+            .onBackgroundClick(() => {{
+                selectedNode = null;
+                highlightNodes.clear();
+                highlightLinks.clear();
+                Graph.nodeColor(Graph.nodeColor()); // Trigger redraw
+            }})
+            .d3AlphaDecay(0.02)
+            .d3VelocityDecay(0.3)
+            .cooldownTime(15000)
+            .enableNodeDrag(true)
+            .enableZoomInteraction(true)
+            .enablePanInteraction(true);
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {{
+            Graph.width(window.innerWidth).height(window.innerHeight);
         }});
-        
-        // Make highlightNode available globally
-        window.highlightNode = highlightNode;
-        
-        console.log('Graph loaded with', graph.order, 'nodes and', graph.size, 'edges');
-        console.log('GPU-accelerated rendering enabled via WebGL');
     </script>
 </body>
 </html>"""
@@ -1057,10 +593,10 @@ def main(folder: str, blacklist: List[str]):
         )
 
     # Prepare data for visualization
-    graph_data = prepare_graph_data(network)
+    nodes_data, edges_data = prepare_graph_data(network)
 
     # Generate HTML content
-    html_content = generate_html_template(folder, graph_data)
+    html_content = generate_html_template(folder, nodes_data, edges_data)
 
     # Write output file
     output_path = f"{folder}.html"
@@ -1069,16 +605,14 @@ def main(folder: str, blacklist: List[str]):
 
     # Print summary
     print(f"Rendered interactive graph to {output_path}")
-    print(f"\n✨ Features:")
-    print(f"  🎮 GPU-accelerated rendering (WebGL via Sigma.js)")
-    print(f"  🔍 Regex search filtering")
-    print(f"  🎨 Filter by node type (file/class/function/method)")
-    print(f"  🖱️  Click nodes to highlight neighbors")
-    print(f"  🎯 Drag nodes with physics simulation")
-    print(f"  📏 Adjustable node sizes")
-    print(f"  🌀 Dynamic layout with ForceAtlas2")
-    print(f"  ⚡ BFS/DFS path finding built-in")
-    print(f"  🔄 Real-time node/edge manipulation")
+    print(f"\nGraph features (using force-graph library):")
+    print(f"  - Click nodes to highlight them and their neighbors")
+    print(f"  - Click background to deselect")
+    print(f"  - Drag nodes to reposition them")
+    print(f"  - Zoom with mouse wheel")
+    print(f"  - Pan by dragging empty space")
+    print(f"  - Hover over nodes for tooltips")
+    print(f"  - Automatic collision detection and smooth physics")
 
 
 if __name__ == "__main__":
