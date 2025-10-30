@@ -154,17 +154,28 @@ class PyFile:
 class Source:
     """Represents a source directory and its Python files."""
 
-    def __init__(self, root: str, extension: str = "py"):
+    def __init__(
+        self, root: str, extension: str = "py", blacklist: Optional[List[str]] = None
+    ):
         self.root = root
         self.catalogue = AttrDict({})
+        self.blacklist = blacklist if blacklist is not None else []
         self.tree = self.filter(extension)
 
     @property
     def children(self) -> List:
         """Get all child folders and files."""
         files = Glob(self.root, silent=True)
-        self.folders = [Source(f) for f in files if os.path.isdir(f)]
-        self.files = [f for f in files if not os.path.isdir(f)]
+        self.folders = [
+            Source(f)
+            for f in files
+            if os.path.isdir(f) and not any(b in str(f) for b in self.blacklist)
+        ]
+        self.files = [
+            f
+            for f in files
+            if not os.path.isdir(f) and not any(b in str(f) for b in self.blacklist)
+        ]
         return self.folders + self.files
 
     def __repr__(self) -> str:
@@ -178,7 +189,11 @@ class Source:
                 x = getattr(x, segment)
         return dir(x)
 
-    def resolve(self, x=None, extension: Optional[str] = None) -> AttrDict:
+    def resolve(
+        self,
+        x=None,
+        extension: Optional[str] = None,
+    ) -> AttrDict:
         """Recursively resolve files and create PyFile objects."""
         x = self if x is None else x
 
@@ -335,10 +350,10 @@ def build_graph_from_node(node, network: nx.Graph, include_children: bool = Fals
     add_class_nodes(network, node.classes, node.file, include_children)
 
 
-def build_network(folder: str) -> nx.Graph:
+def build_network(folder: str, blacklist: List[str]) -> nx.Graph:
     """Build a NetworkX graph from a source folder."""
     network = nx.Graph()
-    source = Source(folder)
+    source = Source(folder, blacklist=blacklist)
 
     # First pass: add all nodes and basic edges
     for attr_name in dir(source.tree):
@@ -397,201 +412,129 @@ def prepare_graph_data(network: nx.Graph) -> tuple[List[Dict], List[Dict]]:
     return nodes_data, edges_data
 
 
-def generate_html_template(
-    folder: str, nodes_data: List[Dict], edges_data: List[Dict]
+def build_tree_structure(network: nx.Graph) -> List[Dict]:
+    """Build a hierarchical tree structure from the network graph.
+
+    Tree hierarchy: Files > Classes/Functions > Methods/Children
+    """
+    tree_data = []
+
+    # Get all nodes by type
+    files = [n for n, d in network.nodes(data=True) if d.get("typ") == "file"]
+
+    for file_node in files:
+        file_children = []
+
+        # Get all neighbors of this file (classes and functions)
+        for neighbor in network.neighbors(file_node):
+            neighbor_data = network.nodes[neighbor]
+            neighbor_type = neighbor_data.get("typ")
+
+            if neighbor_type == "class":
+                # Build class node with methods
+                class_methods = []
+                for class_neighbor in network.neighbors(neighbor):
+                    class_neighbor_data = network.nodes[class_neighbor]
+                    if class_neighbor_data.get("typ") == "method":
+                        # Build method node with children
+                        method_children = []
+                        for method_neighbor in network.neighbors(class_neighbor):
+                            method_neighbor_data = network.nodes[method_neighbor]
+                            if method_neighbor_data.get("typ") == "child":
+                                method_children.append(
+                                    {
+                                        "name": method_neighbor_data.get(
+                                            "name", method_neighbor
+                                        ),
+                                        "id": method_neighbor,
+                                        "type": "child",
+                                        "children": [],
+                                    }
+                                )
+
+                        class_methods.append(
+                            {
+                                "name": class_neighbor_data.get("name", class_neighbor),
+                                "id": class_neighbor,
+                                "type": "method",
+                                "children": method_children,
+                            }
+                        )
+
+                file_children.append(
+                    {
+                        "name": neighbor_data.get("name", neighbor),
+                        "id": neighbor,
+                        "type": "class",
+                        "children": class_methods,
+                    }
+                )
+
+            elif neighbor_type == "function":
+                # Build function node with children
+                function_children = []
+                for func_neighbor in network.neighbors(neighbor):
+                    func_neighbor_data = network.nodes[func_neighbor]
+                    if func_neighbor_data.get("typ") == "child":
+                        function_children.append(
+                            {
+                                "name": func_neighbor_data.get("name", func_neighbor),
+                                "id": func_neighbor,
+                                "type": "child",
+                                "children": [],
+                            }
+                        )
+
+                file_children.append(
+                    {
+                        "name": neighbor_data.get("name", neighbor),
+                        "id": neighbor,
+                        "type": "function",
+                        "children": function_children,
+                    }
+                )
+
+        tree_data.append(
+            {
+                "name": network.nodes[file_node].get("name", file_node),
+                "id": file_node,
+                "type": "file",
+                "children": file_children,
+            }
+        )
+
+    return tree_data
+
+
+def generate_html_from_template(
+    folder: str, nodes_data: List[Dict], edges_data: List[Dict], tree_data: List[Dict]
 ) -> str:
-    """Generate HTML content with D3.js force simulation."""
-    return f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>{folder} - Interactive Graph</title>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
-    <style>
-        body {{
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-            font-family: Arial, sans-serif;
-        }}
-        #graph {{
-            width: 100vw;
-            height: 100vh;
-        }}
-        .links line {{
-            stroke: #999;
-            stroke-opacity: 0.6;
-        }}
-        .nodes circle {{
-            cursor: pointer;
-            stroke: #fff;
-            stroke-width: 1.5px;
-        }}
-        .nodes circle:hover {{
-            stroke: #000;
-            stroke-width: 3px;
-        }}
-        .labels text {{
-            font-size: 10px;
-            pointer-events: none;
-            user-select: none;
-            fill: #333;
-        }}
-        .tooltip {{
-            position: absolute;
-            text-align: center;
-            padding: 8px;
-            background: rgba(0, 0, 0, 0.8);
-            color: white;
-            border-radius: 4px;
-            pointer-events: none;
-            opacity: 0;
-            transition: opacity 0.2s;
-            font-size: 12px;
-        }}
-    </style>
-</head>
-<body>
-    <svg id="graph"></svg>
-    <div class="tooltip"></div>
-    <script>
-        const nodes = {json.dumps(nodes_data)};
-        const links = {json.dumps(edges_data)};
-        
-        const width = window.innerWidth;
-        const height = window.innerHeight;
-        
-        const svg = d3.select("#graph")
-            .attr("width", width)
-            .attr("height", height);
-        
-        const g = svg.append("g");
-        
-        // Add zoom behavior
-        const zoom = d3.zoom()
-            .scaleExtent([0.1, 10])
-            .on("zoom", (event) => {{
-                g.attr("transform", event.transform);
-            }});
-        
-        svg.call(zoom);
-        
-        // Create force simulation
-        const simulation = d3.forceSimulation(nodes)
-            .force("link", d3.forceLink(links)
-                .id(d => d.index)
-                .distance(d => 100 / (d.weight || 1))
-                .strength(0.3))
-            .force("charge", d3.forceManyBody()
-                .strength(d => -300 * (d.size / 5))
-                .distanceMax(400))
-            .force("center", d3.forceCenter(width / 2, height / 2))
-            .force("collision", d3.forceCollide()
-                .radius(d => d.size * 3 + 5)
-                .strength(0.7));
-        
-        // Create links
-        const link = g.append("g")
-            .attr("class", "links")
-            .selectAll("line")
-            .data(links)
-            .enter().append("line")
-            .attr("stroke-width", d => Math.sqrt(d.weight || 1));
-        
-        // Create nodes
-        const node = g.append("g")
-            .attr("class", "nodes")
-            .selectAll("circle")
-            .data(nodes)
-            .enter().append("circle")
-            .attr("r", d => d.size * 2)
-            .attr("fill", d => d.color)
-            .call(d3.drag()
-                .on("start", dragstarted)
-                .on("drag", dragged)
-                .on("end", dragended));
-        
-        // Create labels
-        const labels = g.append("g")
-            .attr("class", "labels")
-            .selectAll("text")
-            .data(nodes)
-            .enter().append("text")
-            .text(d => d.name)
-            .attr("font-size", "10px")
-            .attr("dx", d => d.size * 2 + 5)
-            .attr("dy", 3);
-        
-        // Tooltip
-        const tooltip = d3.select(".tooltip");
-        
-        node.on("mouseover", function(event, d) {{
-            tooltip
-                .style("opacity", 1)
-                .html(`<strong>${{d.name}}</strong><br>Type: ${{d.type}}<br>Size: ${{d.size}}`)
-                .style("left", (event.pageX + 10) + "px")
-                .style("top", (event.pageY - 10) + "px");
-        }})
-        .on("mouseout", function() {{
-            tooltip.style("opacity", 0);
-        }});
-        
-        // Update positions on each tick
-        simulation.on("tick", () => {{
-            link
-                .attr("x1", d => d.source.x)
-                .attr("y1", d => d.source.y)
-                .attr("x2", d => d.target.x)
-                .attr("y2", d => d.target.y);
-            
-            node
-                .attr("cx", d => d.x)
-                .attr("cy", d => d.y);
-            
-            labels
-                .attr("x", d => d.x)
-                .attr("y", d => d.y);
-        }});
-        
-        // Drag functions
-        function dragstarted(event, d) {{
-            if (!event.active) simulation.alphaTarget(0.3).restart();
-            d.fx = d.x;
-            d.fy = d.y;
-        }}
-        
-        function dragged(event, d) {{
-            d.fx = event.x;
-            d.fy = event.y;
-        }}
-        
-        function dragended(event, d) {{
-            if (!event.active) simulation.alphaTarget(0);
-            d.fx = null;
-            d.fy = null;
-        }}
-        
-        // Handle window resize
-        window.addEventListener('resize', () => {{
-            const newWidth = window.innerWidth;
-            const newHeight = window.innerHeight;
-            svg.attr("width", newWidth).attr("height", newHeight);
-            simulation.force("center", d3.forceCenter(newWidth / 2, newHeight / 2));
-            simulation.alpha(0.3).restart();
-        }});
-    </script>
-</body>
-</html>"""
+    """Generate HTML content from template file."""
+    # Get the directory where this script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    template_path = os.path.join(script_dir, "template.html")
+
+    # Read the template file
+    with open(template_path, "r") as f:
+        template = f.read()
+
+    # Replace placeholders with actual data
+    html_content = template.replace("{{FOLDER_NAME}}", folder)
+    html_content = html_content.replace("{{NODES_DATA}}", json.dumps(nodes_data))
+    html_content = html_content.replace("{{EDGES_DATA}}", json.dumps(edges_data))
+    html_content = html_content.replace("{{TREE_DATA}}", json.dumps(tree_data))
+
+    return html_content
 
 
-def main(folder: str):
+def main(folder: str, blacklist: List[str]):
     """Main entry point for generating interactive graph visualization."""
     # Normalize folder path
     folder = folder.rstrip("/")
 
     # Build the network graph
     with working_directory(folder):
-        network = build_network(stem(folder))
+        network = build_network(stem(folder), blacklist=blacklist)
         logger.info(
             f"Built the graph for {folder}. "
             f"{len(network.nodes)} nodes and {len(network.edges)} edges found"
@@ -599,9 +542,12 @@ def main(folder: str):
 
     # Prepare data for visualization
     nodes_data, edges_data = prepare_graph_data(network)
+    tree_data = build_tree_structure(network)
 
-    # Generate HTML content
-    html_content = generate_html_template(folder, nodes_data, edges_data)
+    # Generate HTML content from template
+    html_content = generate_html_from_template(
+        folder, nodes_data, edges_data, tree_data
+    )
 
     # Write output file
     output_path = f"{folder}.html"
@@ -616,8 +562,11 @@ def main(folder: str):
     print(f"  - Pan by dragging empty space")
     print(f"  - Nodes repel each other based on their size")
     print(f"  - Hover over nodes for details")
+    print(f"  - Use the sidebar tree navigation to explore the project structure")
+    print(f"  - Click on tree items to highlight and center nodes in the graph")
 
 
 if __name__ == "__main__":
     folder = sys.argv[1] if len(sys.argv) > 1 else "."
-    main(folder)
+    blacklist = ["__pycache__", ".git", "venv", "env", "node_modules"] + sys.argv[2:]
+    main(folder, blacklist)
