@@ -20,19 +20,19 @@ from torch_snippets.markup import AttrDict
 
 # Constants
 NODE_TYPES = {
-    'file': {'size': 15, 'color': 'red'},
-    'class': {'size': 12, 'color': 'purple'},
-    'function': {'size': 8, 'color': 'green'},
-    'method': {'size': 5, 'color': 'blue'},
-    'child': {'size': 5, 'color': 'yellow'},
+    "file": {"size": 15, "color": "red"},
+    "class": {"size": 12, "color": "purple"},
+    "function": {"size": 8, "color": "green"},
+    "method": {"size": 5, "color": "blue"},
+    "child": {"size": 5, "color": "yellow"},
 }
 
 EDGE_WEIGHTS = {
-    'file_function': 1 / 5,
-    'file_class': 1 / 4,
-    'class_method': 1 / 2.5,
-    'function_child': 1 / 2.5,
-    'method_child': 1 / 1,
+    "file_function": 1 / 5,
+    "file_class": 1 / 4,
+    "class_method": 1 / 2.5,
+    "function_child": 1 / 2.5,
+    "method_child": 1 / 1,
 }
 
 
@@ -48,10 +48,11 @@ def is_plural(items) -> bool:
     """Check if a collection has more than one item."""
     return len(items) != 1
 
+
 # Python Object Classes
 class PyObj:
     """Base class for Python objects (functions, classes, methods)."""
-    
+
     def __init__(self, name: str, function):
         self.name = name
         self.function = function
@@ -70,7 +71,7 @@ class PyObj:
 
 class PyFunc(PyObj):
     """Represents a Python function."""
-    
+
     @property
     def children(self) -> List[str]:
         """Extract function calls from source code."""
@@ -80,7 +81,7 @@ class PyFunc(PyObj):
 
 class PyClass(PyObj):
     """Represents a Python class."""
-    
+
     @property
     def methods(self) -> List[PyFunc]:
         """Get all non-private methods of the class."""
@@ -93,7 +94,7 @@ class PyClass(PyObj):
 
 class PyFile:
     """Represents a Python file with its classes and functions."""
-    
+
     def __init__(self, file_path: str):
         self.file = file_path
         self._module = self._get_module_name(file_path)
@@ -117,7 +118,7 @@ class PyFile:
         """Get all classes defined in this file."""
         if self.mod is None:
             return []
-        
+
         members = getmembers(self.mod, isclass)
         return [
             PyClass(name, cls)
@@ -130,7 +131,7 @@ class PyFile:
         """Get all functions defined in this file."""
         if self.mod is None:
             return []
-        
+
         members = getmembers(self.mod, isfunction)
         return [
             PyFunc(name, func)
@@ -147,12 +148,12 @@ class PyFile:
     def __repr__(self) -> str:
         func_label = "functions" if is_plural(self.functions) else "function"
         class_label = "classes" if is_plural(self.classes) else "class"
-        return f'{self.file} ({len(self.functions)} {func_label} and {len(self.classes)} {class_label})'
+        return f"{self.file} ({len(self.functions)} {func_label} and {len(self.classes)} {class_label})"
 
 
 class Source:
     """Represents a source directory and its Python files."""
-    
+
     def __init__(self, root: str, extension: str = "py"):
         self.root = root
         self.catalogue = AttrDict({})
@@ -180,30 +181,30 @@ class Source:
     def resolve(self, x=None, extension: Optional[str] = None) -> AttrDict:
         """Recursively resolve files and create PyFile objects."""
         x = self if x is None else x
-        
+
         if os.path.isfile(str(x)):
             if extension is None or extn(x) == extension:
                 file_path = str(x)
                 py_file = PyFile(file_path)
-                
+
                 # Add functions to catalogue
                 for func in py_file.functions:
                     original_name = func.name
                     func.name = f"{func.name} @ {file_path}"
                     self.catalogue[original_name] = func
-                
+
                 # Add classes to catalogue
                 for cls in py_file.classes:
                     original_name = cls.name
                     cls.name = f"{cls.name} @ {file_path}"
                     self.catalogue[original_name] = cls
-                
+
                 return AttrDict({stem(x): py_file})
             return AttrDict({})
-        
+
         if isinstance(x, Source):
             return merge([self.resolve(f, extension) for f in x.children])
-        
+
         return AttrDict({})
 
     def filter(self, extension: str) -> AttrDict:
@@ -218,68 +219,89 @@ def add_node_if_not_existing(network: nx.Graph, node_name: str, **kwargs):
         network.add_node(node_name, **kwargs)
 
 
-def add_function_nodes(network: nx.Graph, functions: List[PyFunc], parent_file: str, include_children: bool = False):
+def add_function_nodes(
+    network: nx.Graph,
+    functions: List[PyFunc],
+    parent_file: str,
+    include_children: bool = False,
+):
     """Add function nodes and their relationships to the network."""
     for func in functions:
-        node_config = NODE_TYPES['function']
+        node_config = NODE_TYPES["function"]
         add_node_if_not_existing(
-            network, func.name, 
-            size=node_config['size'], 
-            color=node_config['color'], 
-            name=func.name, 
-            typ='function'
+            network,
+            func.name,
+            size=node_config["size"],
+            color=node_config["color"],
+            name=func.name,
+            typ="function",
         )
-        network.add_edge(func.name, parent_file, weight=EDGE_WEIGHTS['file_function'])
-        
+        network.add_edge(func.name, parent_file, weight=EDGE_WEIGHTS["file_function"])
+
         if include_children:
             for child in func.children:
-                child_config = NODE_TYPES['child']
+                child_config = NODE_TYPES["child"]
                 add_node_if_not_existing(
-                    network, child,
-                    size=child_config['size'],
-                    color=child_config['color'],
+                    network,
+                    child,
+                    size=child_config["size"],
+                    color=child_config["color"],
                     name=child,
-                    typ='child'
+                    typ="child",
                 )
-                network.add_edge(func.name, child, weight=EDGE_WEIGHTS['function_child'])
+                network.add_edge(
+                    func.name, child, weight=EDGE_WEIGHTS["function_child"]
+                )
 
 
-def add_class_nodes(network: nx.Graph, classes: List[PyClass], parent_file: str, include_children: bool = False):
+def add_class_nodes(
+    network: nx.Graph,
+    classes: List[PyClass],
+    parent_file: str,
+    include_children: bool = False,
+):
     """Add class nodes and their relationships to the network."""
     for cls in classes:
-        class_config = NODE_TYPES['class']
+        class_config = NODE_TYPES["class"]
         add_node_if_not_existing(
-            network, cls.name,
-            size=class_config['size'],
-            color=class_config['color'],
+            network,
+            cls.name,
+            size=class_config["size"],
+            color=class_config["color"],
             name=cls.name,
-            typ='class'
+            typ="class",
         )
-        network.add_edge(cls.name, parent_file, weight=EDGE_WEIGHTS['file_class'])
-        
+        network.add_edge(cls.name, parent_file, weight=EDGE_WEIGHTS["file_class"])
+
         for method in cls.methods:
             try:
-                method_config = NODE_TYPES['method']
+                method_config = NODE_TYPES["method"]
                 add_node_if_not_existing(
-                    network, method.name,
-                    size=method_config['size'],
-                    color=method_config['color'],
+                    network,
+                    method.name,
+                    size=method_config["size"],
+                    color=method_config["color"],
                     name=method.name,
-                    typ='method'
+                    typ="method",
                 )
-                network.add_edge(cls.name, method.name, weight=EDGE_WEIGHTS['class_method'])
-                
+                network.add_edge(
+                    cls.name, method.name, weight=EDGE_WEIGHTS["class_method"]
+                )
+
                 if include_children:
                     for child in method.children:
-                        child_config = NODE_TYPES['child']
+                        child_config = NODE_TYPES["child"]
                         add_node_if_not_existing(
-                            network, child,
-                            size=child_config['size'],
-                            color=child_config['color'],
+                            network,
+                            child,
+                            size=child_config["size"],
+                            color=child_config["color"],
                             name=child,
-                            typ='child'
+                            typ="child",
                         )
-                        network.add_edge(method.name, child, weight=EDGE_WEIGHTS['method_child'])
+                        network.add_edge(
+                            method.name, child, weight=EDGE_WEIGHTS["method_child"]
+                        )
             except Exception:
                 # Silently skip methods that cause errors
                 pass
@@ -288,24 +310,27 @@ def add_class_nodes(network: nx.Graph, classes: List[PyClass], parent_file: str,
 def build_graph_from_node(node, network: nx.Graph, include_children: bool = False):
     """Build network graph from a PyFile node."""
     if isinstance(node, AttrDict):
-        return [build_graph_from_node(n, network, include_children) for n in node.values()]
-    
+        return [
+            build_graph_from_node(n, network, include_children) for n in node.values()
+        ]
+
     if len(node) == 0:
         return
-    
+
     # Add file node
-    file_config = NODE_TYPES['file']
+    file_config = NODE_TYPES["file"]
     add_node_if_not_existing(
-        network, node.file,
-        size=file_config['size'],
-        color=file_config['color'],
+        network,
+        node.file,
+        size=file_config["size"],
+        color=file_config["color"],
         name=node.file,
-        typ='file'
+        typ="file",
     )
-    
+
     # Add function nodes
     add_function_nodes(network, node.functions, node.file, include_children)
-    
+
     # Add class nodes
     add_class_nodes(network, node.classes, node.file, include_children)
 
@@ -314,45 +339,38 @@ def build_network(folder: str) -> nx.Graph:
     """Build a NetworkX graph from a source folder."""
     network = nx.Graph()
     source = Source(folder)
-    
+
     # First pass: add all nodes and basic edges
     for attr_name in dir(source.tree):
-        build_graph_from_node(getattr(source.tree, attr_name), network, include_children=False)
-    
+        build_graph_from_node(
+            getattr(source.tree, attr_name), network, include_children=False
+        )
+
     # Second pass: add children relationships
     for attr_name in dir(source.tree):
-        build_graph_from_node(getattr(source.tree, attr_name), network, include_children=True)
-    
+        build_graph_from_node(
+            getattr(source.tree, attr_name), network, include_children=True
+        )
+
     return network
 
 
 @contextlib.contextmanager
-def working_directory(path):
+def working_directory(path: str):
+    """Context manager to temporarily change working directory."""
     prev_cwd = os.getcwd()
     os.chdir(parent(path))
     sys.path.append(str(P(path).resolve()))
-    yield
-    os.chdir(prev_cwd)
+    try:
+        yield
+    finally:
+        os.chdir(prev_cwd)
 
 
-def get_ranges(pos):
-    xs, ys = zip(*list(pos.values()))
-    return np.min(xs), np.max(xs), np.min(ys), np.max(ys)
-
-
-def main(folder):
-    if folder.endswith("/"):
-        folder = folder[:-1]
-    with working_directory(folder):
-        NETWORK = nx.Graph()
-        summarize(stem(folder), NETWORK)
-        logger.info(
-            f"Built the graph for {folder}. {len(NETWORK.nodes)} nodes and {len(NETWORK.edges)} edges found"
-        )
-
-    # Prepare data for D3.js force simulation
+def prepare_graph_data(network: nx.Graph) -> tuple[List[Dict], List[Dict]]:
+    """Convert NetworkX graph to D3.js compatible format."""
     nodes_data = []
-    node_list = list(NETWORK.nodes(data=True))
+    node_list = list(network.nodes(data=True))
     node_index_map = {node[0]: idx for idx, node in enumerate(node_list)}
 
     for node_name, attrs in node_list:
@@ -367,7 +385,7 @@ def main(folder):
         )
 
     edges_data = []
-    for source, target, attrs in NETWORK.edges(data=True):
+    for source, target, attrs in network.edges(data=True):
         edges_data.append(
             {
                 "source": node_index_map[source],
@@ -376,8 +394,14 @@ def main(folder):
             }
         )
 
-    # Create HTML with D3.js force simulation
-    html_content = f"""<!DOCTYPE html>
+    return nodes_data, edges_data
+
+
+def generate_html_template(
+    folder: str, nodes_data: List[Dict], edges_data: List[Dict]
+) -> str:
+    """Generate HTML content with D3.js force simulation."""
+    return f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -559,12 +583,34 @@ def main(folder):
 </body>
 </html>"""
 
+
+def main(folder: str):
+    """Main entry point for generating interactive graph visualization."""
+    # Normalize folder path
+    folder = folder.rstrip("/")
+
+    # Build the network graph
+    with working_directory(folder):
+        network = build_network(stem(folder))
+        logger.info(
+            f"Built the graph for {folder}. "
+            f"{len(network.nodes)} nodes and {len(network.edges)} edges found"
+        )
+
+    # Prepare data for visualization
+    nodes_data, edges_data = prepare_graph_data(network)
+
+    # Generate HTML content
+    html_content = generate_html_template(folder, nodes_data, edges_data)
+
+    # Write output file
     output_path = f"{folder}.html"
     with open(output_path, "w") as f:
         f.write(html_content)
 
+    # Print summary
     print(f"Rendered interactive graph to {output_path}")
-    print(f"Graph features:")
+    print(f"\nGraph features:")
     print(f"  - Drag nodes to move them (other nodes will react)")
     print(f"  - Zoom with mouse wheel")
     print(f"  - Pan by dragging empty space")
@@ -573,7 +619,5 @@ def main(folder):
 
 
 if __name__ == "__main__":
-    import sys
-
     folder = sys.argv[1] if len(sys.argv) > 1 else "."
     main(folder)
