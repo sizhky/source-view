@@ -386,9 +386,17 @@ def prepare_graph_data(network: nx.Graph) -> tuple[List[Dict], List[Dict]]:
     """Convert NetworkX graph to D3.js compatible format."""
     nodes_data = []
     node_list = list(network.nodes(data=True))
-    node_index_map = {node[0]: idx for idx, node in enumerate(node_list)}
 
-    for node_name, attrs in node_list:
+    # Filter out yellow (child) nodes
+    filtered_node_list = [
+        (node_name, attrs)
+        for node_name, attrs in node_list
+        if attrs.get("color") != "yellow"
+    ]
+
+    node_index_map = {node[0]: idx for idx, node in enumerate(filtered_node_list)}
+
+    for node_name, attrs in filtered_node_list:
         nodes_data.append(
             {
                 "id": node_name,
@@ -401,13 +409,15 @@ def prepare_graph_data(network: nx.Graph) -> tuple[List[Dict], List[Dict]]:
 
     edges_data = []
     for source, target, attrs in network.edges(data=True):
-        edges_data.append(
-            {
-                "source": node_index_map[source],
-                "target": node_index_map[target],
-                "weight": attrs.get("weight", 1),
-            }
-        )
+        # Only include edges where both nodes are in the filtered set
+        if source in node_index_map and target in node_index_map:
+            edges_data.append(
+                {
+                    "source": node_index_map[source],
+                    "target": node_index_map[target],
+                    "weight": attrs.get("weight", 1),
+                }
+            )
 
     return nodes_data, edges_data
 
@@ -436,21 +446,42 @@ def generate_html_template(
         .links line {{
             stroke: #999;
             stroke-opacity: 0.6;
+            transition: stroke-opacity 0.3s, stroke-width 0.3s, stroke 0.3s;
+        }}
+        .links line.dimmed {{
+            stroke-opacity: 0.1;
+        }}
+        .links line.highlighted {{
+            stroke: #ff6600;
+            stroke-opacity: 1;
+            stroke-width: 2px;
         }}
         .nodes circle {{
             cursor: pointer;
             stroke: #fff;
             stroke-width: 1.5px;
+            transition: opacity 0.3s, stroke-width 0.2s;
         }}
         .nodes circle:hover {{
             stroke: #000;
             stroke-width: 3px;
         }}
+        .nodes circle.dimmed {{
+            opacity: 0.2;
+        }}
+        .nodes circle.highlighted {{
+            stroke: #ff6600;
+            stroke-width: 3px;
+        }}
         .labels text {{
-            font-size: 10px;
+            font-size: 14px;
             pointer-events: none;
             user-select: none;
             fill: #333;
+            transition: opacity 0.3s;
+        }}
+        .labels text.dimmed {{
+            opacity: 0.2;
         }}
         .tooltip {{
             position: absolute;
@@ -533,12 +564,78 @@ def generate_html_template(
             .data(nodes)
             .enter().append("text")
             .text(d => d.name)
-            .attr("font-size", "10px")
+            .attr("font-size", "14px")
             .attr("dx", d => d.size * 2 + 5)
             .attr("dy", 3);
         
         // Tooltip
         const tooltip = d3.select(".tooltip");
+        
+        // Track selected node
+        let selectedNode = null;
+        
+        // Build neighbor map for quick lookup
+        const neighborMap = new Map();
+        nodes.forEach((node, i) => {{
+            neighborMap.set(i, new Set());
+        }});
+        links.forEach(link => {{
+            const sourceIndex = typeof link.source === 'object' ? link.source.index : link.source;
+            const targetIndex = typeof link.target === 'object' ? link.target.index : link.target;
+            neighborMap.get(sourceIndex).add(targetIndex);
+            neighborMap.get(targetIndex).add(sourceIndex);
+        }});
+        
+        // Function to highlight node and neighbors
+        function highlightNode(d) {{
+            if (!d) {{
+                // Reset all highlighting
+                node.classed("dimmed", false).classed("highlighted", false);
+                link.classed("dimmed", false).classed("highlighted", false);
+                labels.classed("dimmed", false);
+                selectedNode = null;
+                return;
+            }}
+            
+            const nodeIndex = d.index;
+            const neighbors = neighborMap.get(nodeIndex);
+            
+            // Highlight selected node and dim others
+            node.classed("dimmed", n => n.index !== nodeIndex && !neighbors.has(n.index))
+                .classed("highlighted", n => n.index === nodeIndex);
+            
+            // Highlight connected edges and dim others
+            link.classed("dimmed", l => {{
+                const sourceIndex = l.source.index;
+                const targetIndex = l.target.index;
+                return !(sourceIndex === nodeIndex || targetIndex === nodeIndex);
+            }})
+            .classed("highlighted", l => {{
+                const sourceIndex = l.source.index;
+                const targetIndex = l.target.index;
+                return sourceIndex === nodeIndex || targetIndex === nodeIndex;
+            }});
+            
+            // Dim labels that are not part of the selection
+            labels.classed("dimmed", n => n.index !== nodeIndex && !neighbors.has(n.index));
+            
+            selectedNode = d;
+        }}
+        
+        node.on("click", function(event, d) {{
+            event.stopPropagation();
+            if (selectedNode === d) {{
+                // Deselect if clicking the same node
+                highlightNode(null);
+            }} else {{
+                highlightNode(d);
+            }}
+        }});
+        
+        // Click on background to deselect
+        svg.on("click", function() {{
+            highlightNode(null);
+        }});
         
         node.on("mouseover", function(event, d) {{
             tooltip
